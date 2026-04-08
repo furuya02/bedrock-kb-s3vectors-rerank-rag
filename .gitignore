@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# CDK
+cdk/dist/
+cdk/cdk.out/
+cdk/*.js
+cdk/*.d.ts
+
+# TypeScript
+*.js.map
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Temporary files
+tmp/
