@@ -63,7 +63,7 @@ pnpm cdk deploy
 S3 データソースバケットにドキュメントをアップロードします：
 
 ```bash
-aws s3 cp your-document.pdf s3://bedrock-kb-datasource-<account-id>-<region>/
+aws s3 sync sample_data/ s3://bk-s3v-rerank-datasource-<region>-<account-id>/
 ```
 
 その後、AWS コンソールまたは CLI から Knowledge Base のデータソースを同期します。
@@ -120,6 +120,7 @@ cdk/
 ├── package.json
 ├── tsconfig.json
 └── cdk.json
+sample_data/                                 # テスト用サンプルドキュメント
 ```
 
 ## 動作の仕組み
@@ -134,12 +135,32 @@ cdk/
 | リソース | 説明 |
 |---------|------|
 | S3 Bucket | ドキュメントデータソース |
-| S3 Vectors Bucket | ベクトル埋め込みストア |
+| S3 Vectors（Custom Resource） | ベクトルバケットとインデックス |
 | Bedrock Knowledge Base | S3 Vectors を使用した RAG ナレッジベース |
 | Bedrock Data Source | S3 データソース設定 |
 | Lambda Function | RAG クエリハンドラー（Python 3.13） |
 | API Gateway | REST API エンドポイント |
 | IAM Roles | KB と Lambda 用のロール |
+
+## 設定
+
+プロジェクト名は `cdk/cdk.json` で設定されています：
+
+```json
+{
+  "context": {
+    "projectName": "bedrock-kb-s3vectors-rerank-rag"
+  }
+}
+```
+
+この値が全リソース名のプレフィックスとして使用されます。
+
+## クリーンアップ
+
+```bash
+pnpm cdk destroy
+```
 
 ## ライセンス
 

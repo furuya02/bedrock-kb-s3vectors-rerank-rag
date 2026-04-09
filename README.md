@@ -63,7 +63,7 @@ pnpm cdk deploy
 Upload documents to the S3 data source bucket:
 
 ```bash
-aws s3 cp your-document.pdf s3://bedrock-kb-datasource-<account-id>-<region>/
+aws s3 sync sample_data/ s3://bk-s3v-rerank-datasource-<region>-<account-id>/
 ```
 
 Then sync the Knowledge Base data source from the AWS Console or CLI.
@@ -120,6 +120,7 @@ cdk/
 ├── package.json
 ├── tsconfig.json
 └── cdk.json
+sample_data/                                 # Sample documents for testing
 ```
 
 ## How It Works
@@ -134,12 +135,32 @@ cdk/
 | Resource | Description |
 |----------|-------------|
 | S3 Bucket | Document data source |
-| S3 Vectors Bucket | Vector embeddings store |
+| S3 Vectors (Custom Resource) | Vector bucket and index for embeddings |
 | Bedrock Knowledge Base | RAG knowledge base with S3 Vectors |
 | Bedrock Data Source | S3 data source configuration |
 | Lambda Function | RAG query handler (Python 3.13) |
 | API Gateway | REST API endpoint |
 | IAM Roles | Roles for KB and Lambda |
+
+## Configuration
+
+The project name is configured in `cdk/cdk.json`:
+
+```json
+{
+  "context": {
+    "projectName": "bedrock-kb-s3vectors-rerank-rag"
+  }
+}
+```
+
+This value is used as a prefix for all resource names.
+
+## Cleanup
+
+```bash
+pnpm cdk destroy
+```
 
 ## License
 
