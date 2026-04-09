@@ -4,6 +4,7 @@ node_modules/
 # CDK
 cdk/dist/
 cdk/cdk.out/
+cdk/cdk.out*/
 cdk/*.js
 cdk/*.d.ts
 
