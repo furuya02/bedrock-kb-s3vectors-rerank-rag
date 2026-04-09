@@ -1,0 +1,31 @@
+Amazon Bedrock 概要
+
+Amazon Bedrockは、AWSが提供するフルマネージドのAIサービスです。複数の基盤モデル（Foundation Model）をAPI経由で利用でき、生成AIアプリケーションを簡単に構築できます。
+
+利用可能なモデル:
+- Anthropic Claude（Claude 3.5 Sonnet、Claude 3 Haiku、Claude 3 Opusなど）
+- Amazon Titan（Titan Text、Titan Embedding、Titan Imageなど）
+- Meta Llama（Llama 3.1、Llama 3.2など）
+- Mistral AI（Mistral Large、Mixtralなど）
+- Cohere（Command R、Command R+など）
+- Stability AI（Stable Diffusionなど）
+
+主な機能:
+
+1. Knowledge Bases（ナレッジベース）
+Knowledge Basesは、RAG（Retrieval-Augmented Generation）を実現する機能です。ドキュメントをベクトル化してベクトルストアに格納し、ユーザーのクエリに関連する情報を検索して回答を生成します。ベクトルストアとして、Amazon OpenSearch Serverless、Amazon Aurora PostgreSQL、Pinecone、Redis Enterprise Cloud、Amazon S3 Vectorsなどを利用できます。
+
+2. Agents（エージェント）
+Agentsは、基盤モデルが外部データソースやAPIと連携し、複雑なタスクを自律的に実行する機能です。アクショングループを定義することで、Lambda関数やAPIを呼び出すことができます。
+
+3. Guardrails（ガードレール）
+Guardrailsは、生成AIアプリケーションのセキュリティとコンプライアンスを確保する機能です。不適切なコンテンツのフィルタリング、PII（個人情報）の検出・マスキング、トピックの制限などを設定できます。
+
+4. Model Evaluation（モデル評価）
+異なるモデルのパフォーマンスを比較評価する機能です。自動評価と人間による評価の両方をサポートしています。
+
+5. Fine-tuning（ファインチューニング）
+カスタムデータを使用して基盤モデルを微調整する機能です。Continued Pre-trainingとInstruction-based Fine-tuningの2つの方法があります。
+
+リランキング:
+Amazon Bedrockは、リランキングモデル（Amazon Rerank v1）を提供しています。リランキングは、初期検索で取得したドキュメントの関連度を再評価し、より精度の高い順序に並び替える技術です。RAGシステムにおいて、検索結果の品質を大幅に向上させることができます。特に、ベクトル検索だけでは捉えきれない意味的な関連性を、リランキングモデルが補完します。

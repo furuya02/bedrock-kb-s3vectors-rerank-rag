@@ -1,0 +1,35 @@
+AWS CDK（Cloud Development Kit）概要
+
+AWS CDKは、プログラミング言語を使用してAWSのクラウドインフラストラクチャをコードとして定義するためのフレームワークです。CloudFormationテンプレートを直接記述する代わりに、TypeScript、Python、Java、C#、Goなどの一般的なプログラミング言語でインフラを定義できます。
+
+主な概念:
+
+1. App（アプリ）
+CDKアプリケーションのルートコンストラクトです。1つ以上のスタックを含みます。
+
+2. Stack（スタック）
+CloudFormationスタックに対応するデプロイ単位です。AWSリソースはスタック内に定義されます。
+
+3. Construct（コンストラクト）
+AWSリソースを抽象化した基本的なビルディングブロックです。3つのレベルがあります:
+- L1（CloudFormation Resource）: CloudFormationリソースを直接表現。Cfnプレフィックス付き。
+- L2（Higher-Level Construct）: L1をラップし、便利なデフォルト値やヘルパーメソッドを提供。
+- L3（Patterns）: 複数のリソースを組み合わせたハイレベルなパターン。
+
+主なコマンド:
+- cdk init: プロジェクトの初期化
+- cdk synth: CloudFormationテンプレートの生成
+- cdk diff: デプロイ済みスタックとの差分確認
+- cdk deploy: スタックのデプロイ
+- cdk destroy: スタックの削除
+- cdk bootstrap: CDK Toolkitスタックのデプロイ（初回のみ）
+
+CDKのベストプラクティス:
+- 環境ごとにスタックを分離する
+- コンストラクトを再利用可能な単位で設計する
+- cdk.jsonのcontextでフィーチャーフラグを管理する
+- テスト（snapshot test、fine-grained assertion）を書く
+- CDK Pipelines を使用してCI/CDを構築する
+
+CDKとCloudFormationの違い:
+CDKはCloudFormationの上に構築されたフレームワークです。CDKで記述したコードはcdk synthコマンドでCloudFormationテンプレートに変換されます。CDKの利点は、プログラミング言語の機能（ループ、条件分岐、型チェック）を活用できること、L2/L3コンストラクトによる高い抽象度、コードの再利用性です。
