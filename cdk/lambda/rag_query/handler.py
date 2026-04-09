@@ -75,7 +75,7 @@ def rerank_results(
                 "modelConfiguration": {
                     "modelArn": f"arn:aws:bedrock:{REGION}::foundation-model/{RERANK_MODEL_ID}",
                 },
-                "numberOfResults": top_n,
+                "numberOfResults": min(top_n, len(documents)),
             },
         },
     )
