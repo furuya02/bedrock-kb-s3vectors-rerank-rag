@@ -1,6 +1,6 @@
 # bedrock-kb-s3vectors-rerank-rag
 
-A sample CDK project that implements RAG (Retrieval-Augmented Generation) using Amazon Bedrock Knowledge Bases with S3 Vectors and Reranking.
+A sample CDK project that implements RAG (Retrieval-Augmented Generation) using Amazon Bedrock Knowledge Bases with S3 Vectors and Reranking. A single `cdk deploy` sets up a complete RAG environment with reranking.
 
 [Japanese (日本語)](README.ja.md)
 
@@ -15,69 +15,120 @@ This project demonstrates how to build a RAG system using:
 
 ## Architecture
 
-```
-Documents --> S3 Bucket (Data Source)
-                    |
-              Bedrock Knowledge Base
-                    |
-              Titan Embedding V2 --> S3 Vectors (Vector Store)
+![](images/001.png)
 
-Client --> API Gateway --> Lambda (rag_query)
-                              |
-                        1. Retrieve from KB (top_k=10)
-                              |
-                        2. Rerank (Amazon Rerank v1, top_n=5)
-                              |
-                        3. Generate Answer (Claude 3.5 Sonnet)
-```
 
 ## Prerequisites
 
-- AWS Account with Bedrock model access enabled
+- AWS Account
+- The following Bedrock model access enabled:
+  - Amazon Titan Text Embeddings V2
+  - Amazon Rerank v1
+  - Anthropic Claude 3.5 Sonnet v2 (APAC inference profile)
 - Node.js 18+
 - pnpm
-- Python 3.13+
 - AWS CDK CLI
-
-## Installation
-
-```bash
-cd cdk
-pnpm install
-```
 
 ## Deployment
 
 ```bash
-# Bootstrap (first time only)
-pnpm cdk bootstrap
-
-# Deploy
+git clone https://github.com/furuya02/bedrock-kb-s3vectors-rerank-rag.git
+cd bedrock-kb-s3vectors-rerank-rag/cdk
+pnpm install
+pnpm cdk bootstrap  # first time only
 pnpm cdk deploy
 ```
 
+After deployment, the following are automatically executed:
+- S3 Vectors bucket and index creation
+- Bedrock Knowledge Base setup
+- Sample document upload to S3
+- Data source sync (ingestion job start)
+
+Please wait 1-2 minutes after deployment for the ingestion job to complete.
+
 ## Usage
 
-### Upload Documents
-
-Upload documents to the S3 data source bucket:
+Use the `QueryEndpoint` shown in the deployment output to run queries.
 
 ```bash
-aws s3 sync sample_data/ s3://bk-s3v-rerank-datasource-<region>-<account-id>/
+curl -X POST <QueryEndpoint> \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is S3 Vectors?"}'
 ```
 
-Then sync the Knowledge Base data source from the AWS Console or CLI.
-
-### Query the RAG API
+### Sample Queries
 
 ```bash
-curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/v1/query \
+# About S3 Vectors
+curl -X POST <QueryEndpoint> \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "Your question here",
-    "top_k": 10,
-    "top_n": 5
-  }'
+  -d '{"query": "S3 Vectorsとは何ですか？"}'
+
+# How reranking works
+curl -X POST <QueryEndpoint> \
+  -H "Content-Type: application/json" \
+  -d '{"query": "リランキングの仕組みを教えてください"}'
+
+# Lambda memory limits
+curl -X POST <QueryEndpoint> \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Lambdaのメモリ制限はいくつですか？"}'
+```
+
+### Adding Documents
+
+Documents added to the S3 bucket are automatically synced to the Knowledge Base.
+
+```bash
+aws s3 cp your-document.txt s3://<DataSourceBucketName>/
+```
+
+Documents are also automatically synced when deleted.
+
+### Verifying Rerank Behavior (CloudWatch Logs)
+
+By enabling Bedrock model invocation logging, you can view the rerank input (documents from vector search) and output (`relevance_score` re-evaluation) in CloudWatch Logs.
+
+**Enable logging:**
+
+Bedrock Console → Settings → Model invocation logging → Enable CloudWatch Logs
+
+**View logs:**
+
+```bash
+aws logs filter-log-events \
+  --log-group-name /aws/bedrock/model-invocation-logs \
+  --filter-pattern '"amazon.rerank"' \
+  --region ap-northeast-1 \
+  --query "events[].message" --output text
+```
+
+The logs contain:
+
+- **inputBodyJson**: Documents from vector search (`documents`) and the query (`query`)
+- **outputBodyJson**: Each document's `relevance_score` (reranked score) and `index` (original position)
+
+```json
+{
+  "operation": "InvokeModel",
+  "modelId": "arn:aws:bedrock:...foundation-model/amazon.rerank-v1:0",
+  "input": {
+    "inputBodyJson": {
+      "documents": ["Document 1...", "Document 2...", ...],
+      "query": "What is S3 Vectors?"
+    }
+  },
+  "output": {
+    "outputBodyJson": {
+      "results": [
+        {"index": 0, "relevance_score": 0.9604},
+        {"index": 3, "relevance_score": 0.0062},
+        ...
+      ]
+    }
+  }
+}
 ```
 
 ### API Parameters
@@ -114,21 +165,24 @@ cdk/
 ├── lib/
 │   └── bedrock-kb-s3vectors-rerank-stack.ts # Main CDK stack
 ├── lambda/
-│   └── rag_query/
-│       ├── handler.py                       # RAG query with reranking
-│       └── requirements.txt
+│   ├── rag_query/
+│   │   ├── handler.py                       # RAG query with reranking
+│   │   └── requirements.txt
+│   └── sync_trigger/
+│       └── handler.py                       # Auto-sync KB on S3 events
 ├── package.json
 ├── tsconfig.json
 └── cdk.json
-sample_data/                                 # Sample documents for testing
+sample_data/                                 # Sample documents (auto-uploaded)
 ```
 
 ## How It Works
 
 1. **Document Ingestion**: Documents uploaded to S3 are chunked (512 tokens, 20% overlap) and embedded using Titan Embedding V2 (1024 dimensions), then stored in S3 Vectors
-2. **Retrieval**: When a query is received, it is embedded and used to search the S3 Vectors store for the top-k most similar documents
-3. **Reranking**: Retrieved documents are reranked using Amazon Rerank v1 to improve relevance ordering
-4. **Generation**: The top-n reranked documents are used as context for Claude 3.5 Sonnet to generate a final answer
+2. **Auto Sync**: File additions/deletions in the S3 bucket are detected and automatically trigger an ingestion job via Lambda
+3. **Retrieval**: When a query is received, it is embedded and used to search the S3 Vectors store for the top-k most similar documents
+4. **Reranking**: Retrieved documents are reranked using Amazon Rerank v1 to improve relevance ordering
+5. **Generation**: The top-n reranked documents are used as context for Claude 3.5 Sonnet to generate a final answer
 
 ## AWS Resources Created
 
@@ -138,7 +192,8 @@ sample_data/                                 # Sample documents for testing
 | S3 Vectors (Custom Resource) | Vector bucket and index for embeddings |
 | Bedrock Knowledge Base | RAG knowledge base with S3 Vectors |
 | Bedrock Data Source | S3 data source configuration |
-| Lambda Function | RAG query handler (Python 3.13) |
+| Lambda Function (rag_query) | RAG query handler (Python 3.13) |
+| Lambda Function (sync_trigger) | Auto-sync KB on S3 events |
 | API Gateway | REST API endpoint |
 | IAM Roles | Roles for KB and Lambda |
 

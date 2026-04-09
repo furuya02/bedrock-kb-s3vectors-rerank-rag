@@ -1,5 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import * as s3n from "aws-cdk-lib/aws-s3-notifications";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
@@ -20,17 +22,27 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
     // S3 Bucket: ドキュメントデータソース
     // ========================================
     const dataBucket = new s3.Bucket(this, "DataSourceBucket", {
-      bucketName: `${shortName}-datasource-${region}-${accountId}`,
+      bucketName: `${shortName}-datasource-${accountId}`,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
     });
 
+    // サンプルデータを自動アップロード
+    const sampleDataDeployment = new s3deploy.BucketDeployment(
+      this,
+      "SampleDataDeployment",
+      {
+        sources: [s3deploy.Source.asset("../sample_data")],
+        destinationBucket: dataBucket,
+      }
+    );
+
     // ========================================
     // S3 Vectors: ベクトルバケット & インデックス
     // ========================================
-    const vectorBucketName = `${shortName}-vectors-${region}-${accountId}`;
+    const vectorBucketName = `${shortName}-vectors-${accountId}`;
     const vectorIndexName = `${projectName}-index`;
 
     // S3 Vectors ベクトルバケットを作成
@@ -68,8 +80,6 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
       }
     );
 
-    const vectorBucketArn = `arn:aws:s3vectors:${region}:${accountId}:bucket/${vectorBucketName}`;
-
     // S3 Vectors ベクトルインデックスを作成
     const createVectorIndex = new cr.AwsCustomResource(
       this,
@@ -84,6 +94,12 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
             dimension: 1024,
             distanceMetric: "cosine",
             dataType: "float32",
+            metadataConfiguration: {
+              nonFilterableMetadataKeys: [
+                "AMAZON_BEDROCK_TEXT_CHUNK",
+                "AMAZON_BEDROCK_METADATA",
+              ],
+            },
           },
           physicalResourceId: cr.PhysicalResourceId.of(
             `${vectorBucketName}/${vectorIndexName}`
@@ -137,9 +153,7 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
     kbRole.addToPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: [
-          "s3vectors:*",
-        ],
+        actions: ["s3vectors:*"],
         resources: [
           `arn:aws:s3vectors:${region}:${accountId}:bucket/*`,
         ],
@@ -214,6 +228,73 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
     });
 
     // ========================================
+    // データソース同期（自動インジェスト）
+    // ========================================
+    const startIngestionJob = new cr.AwsCustomResource(
+      this,
+      "StartIngestionJob",
+      {
+        onCreate: {
+          service: "BedrockAgent",
+          action: "startIngestionJob",
+          parameters: {
+            knowledgeBaseId: knowledgeBase.attrKnowledgeBaseId,
+            dataSourceId: dataSource.attrDataSourceId,
+          },
+          physicalResourceId: cr.PhysicalResourceId.of(
+            `${knowledgeBase.attrKnowledgeBaseId}-ingestion`
+          ),
+        },
+        policy: cr.AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: ["bedrock:StartIngestionJob"],
+            resources: [knowledgeBase.attrKnowledgeBaseArn],
+          }),
+        ]),
+      }
+    );
+
+    startIngestionJob.node.addDependency(dataSource);
+    startIngestionJob.node.addDependency(sampleDataDeployment);
+
+    // ========================================
+    // S3 イベントによる自動同期
+    // ========================================
+    const syncTriggerLambda = new lambda.Function(
+      this,
+      "SyncTriggerFunction",
+      {
+        functionName: `${projectName}-sync-trigger`,
+        runtime: lambda.Runtime.PYTHON_3_13,
+        handler: "handler.lambda_handler",
+        code: lambda.Code.fromAsset("lambda/sync_trigger"),
+        timeout: cdk.Duration.seconds(10),
+        memorySize: 128,
+        environment: {
+          KNOWLEDGE_BASE_ID: knowledgeBase.attrKnowledgeBaseId,
+          DATA_SOURCE_ID: dataSource.attrDataSourceId,
+          REGION: region,
+        },
+      }
+    );
+
+    syncTriggerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["bedrock:StartIngestionJob"],
+        resources: [knowledgeBase.attrKnowledgeBaseArn],
+      })
+    );
+
+    dataBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(syncTriggerLambda)
+    );
+    dataBucket.addEventNotification(
+      s3.EventType.OBJECT_REMOVED,
+      new s3n.LambdaDestination(syncTriggerLambda)
+    );
+
+    // ========================================
     // Lambda: RAG クエリ（リランク付き）
     // ========================================
     const ragQueryLambda = new lambda.Function(this, "RagQueryFunction", {
@@ -227,7 +308,7 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
         KNOWLEDGE_BASE_ID: knowledgeBase.attrKnowledgeBaseId,
         RERANK_MODEL_ID: "amazon.rerank-v1:0",
         GENERATION_MODEL_ID:
-          "anthropic.claude-3-5-sonnet-20241022-v2:0",
+          "apac.anthropic.claude-3-5-sonnet-20241022-v2:0",
         REGION: region,
       },
     });
@@ -244,8 +325,18 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
         resources: [
           knowledgeBase.attrKnowledgeBaseArn,
           `arn:aws:bedrock:${region}::foundation-model/amazon.rerank-v1:0`,
-          `arn:aws:bedrock:${region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0`,
+          `arn:aws:bedrock:${region}:${accountId}:inference-profile/apac.anthropic.claude-3-5-sonnet-20241022-v2:0`,
+          `arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0`,
         ],
+      })
+    );
+
+    // Lambda に Rerank アクセス権限を付与
+    ragQueryLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["bedrock:Rerank"],
+        resources: ["*"],
       })
     );
 
@@ -256,7 +347,7 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
       restApiName: `${projectName}-api`,
       description: `${projectName} - API for Bedrock Knowledge Base RAG with Reranking`,
       deployOptions: {
-        stageName: "v1",
+        stageName: "prod",
       },
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
@@ -278,14 +369,14 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
       description: "Bedrock Knowledge Base ID",
     });
 
+    new cdk.CfnOutput(this, "DataSourceId", {
+      value: dataSource.attrDataSourceId,
+      description: "Bedrock Data Source ID",
+    });
+
     new cdk.CfnOutput(this, "DataSourceBucketName", {
       value: dataBucket.bucketName,
       description: "S3 Data Source Bucket Name",
-    });
-
-    new cdk.CfnOutput(this, "ApiEndpoint", {
-      value: api.url,
-      description: "API Gateway Endpoint URL",
     });
 
     new cdk.CfnOutput(this, "QueryEndpoint", {
