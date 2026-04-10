@@ -39,15 +39,26 @@ pnpm cdk bootstrap  # first time only
 pnpm cdk deploy
 ```
 
-After deployment, the following are automatically executed:
-- S3 Vectors bucket and index creation
-- Bedrock Knowledge Base setup
-- Sample document upload to S3
-- Data source sync (ingestion job start)
-
-Please wait 1-2 minutes after deployment for the ingestion job to complete.
+After deployment, the following are automatically created:
+- S3 Vectors bucket and index
+- Bedrock Knowledge Base
+- S3 data source bucket
+- Auto-sync via S3 events (Lambda)
+- RAG query API (Lambda + API Gateway)
 
 ## Usage
+
+### 1. Upload Documents
+
+Upload documents to the S3 bucket shown in the `DataSourceBucketName` deployment output. Sample data is included in the repository.
+
+```bash
+aws s3 sync sample_data/ s3://<DataSourceBucketName>/
+```
+
+When files are added or removed from S3, the Knowledge Base sync is triggered automatically. Please wait 1-2 minutes for the sync to complete.
+
+### 2. Run Queries
 
 Use the `QueryEndpoint` shown in the deployment output to run queries.
 

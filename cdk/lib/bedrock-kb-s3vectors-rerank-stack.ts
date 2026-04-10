@@ -1,6 +1,5 @@
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
-import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as s3n from "aws-cdk-lib/aws-s3-notifications";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -28,16 +27,6 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
     });
-
-    // サンプルデータを自動アップロード
-    const sampleDataDeployment = new s3deploy.BucketDeployment(
-      this,
-      "SampleDataDeployment",
-      {
-        sources: [s3deploy.Source.asset("../sample_data")],
-        destinationBucket: dataBucket,
-      }
-    );
 
     // ========================================
     // S3 Vectors: ベクトルバケット & インデックス
@@ -226,36 +215,6 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
         },
       },
     });
-
-    // ========================================
-    // データソース同期（自動インジェスト）
-    // ========================================
-    const startIngestionJob = new cr.AwsCustomResource(
-      this,
-      "StartIngestionJob",
-      {
-        onCreate: {
-          service: "BedrockAgent",
-          action: "startIngestionJob",
-          parameters: {
-            knowledgeBaseId: knowledgeBase.attrKnowledgeBaseId,
-            dataSourceId: dataSource.attrDataSourceId,
-          },
-          physicalResourceId: cr.PhysicalResourceId.of(
-            `${knowledgeBase.attrKnowledgeBaseId}-ingestion`
-          ),
-        },
-        policy: cr.AwsCustomResourcePolicy.fromStatements([
-          new iam.PolicyStatement({
-            actions: ["bedrock:StartIngestionJob"],
-            resources: [knowledgeBase.attrKnowledgeBaseArn],
-          }),
-        ]),
-      }
-    );
-
-    startIngestionJob.node.addDependency(dataSource);
-    startIngestionJob.node.addDependency(sampleDataDeployment);
 
     // ========================================
     // S3 イベントによる自動同期
