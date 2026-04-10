@@ -1,11 +1,11 @@
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3n from "aws-cdk-lib/aws-s3-notifications";
+import * as s3vectors from "aws-cdk-lib/aws-s3vectors";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as bedrock from "aws-cdk-lib/aws-bedrock";
-import * as cr from "aws-cdk-lib/custom-resources";
 import { Construct } from "constructs";
 
 export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
@@ -25,7 +25,6 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
     });
 
     // ========================================
@@ -34,92 +33,30 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
     const vectorBucketName = `${shortName}-vectors-${accountId}`;
     const vectorIndexName = `${projectName}-index`;
 
-    // S3 Vectors ベクトルバケットを作成
-    const createVectorBucket = new cr.AwsCustomResource(
+    const vectorBucket = new s3vectors.CfnVectorBucket(
       this,
-      "CreateVectorBucket",
+      "VectorBucket",
       {
-        onCreate: {
-          service: "S3Vectors",
-          action: "createVectorBucket",
-          parameters: {
-            vectorBucketName: vectorBucketName,
-          },
-          physicalResourceId: cr.PhysicalResourceId.of(vectorBucketName),
-        },
-        onDelete: {
-          service: "S3Vectors",
-          action: "deleteVectorBucket",
-          parameters: {
-            vectorBucketName: vectorBucketName,
-          },
-        },
-        policy: cr.AwsCustomResourcePolicy.fromStatements([
-          new iam.PolicyStatement({
-            actions: [
-              "s3vectors:CreateVectorBucket",
-              "s3vectors:DeleteVectorBucket",
-            ],
-            resources: [
-              `arn:aws:s3vectors:${region}:${accountId}:bucket/${vectorBucketName}`,
-              `arn:aws:s3vectors:${region}:${accountId}:bucket/*`,
-            ],
-          }),
-        ]),
+        vectorBucketName: vectorBucketName,
       }
     );
+    vectorBucket.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
 
-    // S3 Vectors ベクトルインデックスを作成
-    const createVectorIndex = new cr.AwsCustomResource(
-      this,
-      "CreateVectorIndex",
-      {
-        onCreate: {
-          service: "S3Vectors",
-          action: "createIndex",
-          parameters: {
-            vectorBucketName: vectorBucketName,
-            indexName: vectorIndexName,
-            dimension: 1024,
-            distanceMetric: "cosine",
-            dataType: "float32",
-            metadataConfiguration: {
-              nonFilterableMetadataKeys: [
-                "AMAZON_BEDROCK_TEXT_CHUNK",
-                "AMAZON_BEDROCK_METADATA",
-              ],
-            },
-          },
-          physicalResourceId: cr.PhysicalResourceId.of(
-            `${vectorBucketName}/${vectorIndexName}`
-          ),
-        },
-        onDelete: {
-          service: "S3Vectors",
-          action: "deleteIndex",
-          parameters: {
-            vectorBucketName: vectorBucketName,
-            indexName: vectorIndexName,
-          },
-        },
-        policy: cr.AwsCustomResourcePolicy.fromStatements([
-          new iam.PolicyStatement({
-            actions: [
-              "s3vectors:CreateIndex",
-              "s3vectors:DeleteIndex",
-            ],
-            resources: [
-              `arn:aws:s3vectors:${region}:${accountId}:bucket/${vectorBucketName}`,
-              `arn:aws:s3vectors:${region}:${accountId}:bucket/${vectorBucketName}/index/*`,
-            ],
-          }),
-        ]),
-      }
-    );
-
-    createVectorIndex.node.addDependency(createVectorBucket);
-
-    const vectorIndexArn = `arn:aws:s3vectors:${region}:${accountId}:bucket/${vectorBucketName}/index/${vectorIndexName}`;
+    const vectorIndex = new s3vectors.CfnIndex(this, "VectorIndex", {
+      vectorBucketName: vectorBucketName,
+      indexName: vectorIndexName,
+      dimension: 1024,
+      distanceMetric: "cosine",
+      dataType: "float32",
+      metadataConfiguration: {
+        nonFilterableMetadataKeys: [
+          "AMAZON_BEDROCK_TEXT_CHUNK",
+          "AMAZON_BEDROCK_METADATA",
+        ],
+      },
+    });
+    vectorIndex.addDependency(vectorBucket);
+    vectorIndex.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
 
     // ========================================
     // IAM Role: Bedrock Knowledge Base 用
@@ -184,14 +121,14 @@ export class BedrockKbS3VectorsRerankStack extends cdk.Stack {
         storageConfiguration: {
           type: "S3_VECTORS",
           s3VectorsConfiguration: {
-            indexArn: vectorIndexArn,
+            indexArn: vectorIndex.attrIndexArn,
           },
         },
       }
     );
 
     knowledgeBase.node.addDependency(kbRole);
-    knowledgeBase.node.addDependency(createVectorIndex);
+    knowledgeBase.addDependency(vectorIndex);
 
     // ========================================
     // Bedrock Data Source
