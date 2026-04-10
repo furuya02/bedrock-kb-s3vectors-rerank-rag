@@ -2,108 +2,94 @@
 
 import json
 import os
-from typing import Any
 
 import boto3
 
 KNOWLEDGE_BASE_ID = os.environ["KNOWLEDGE_BASE_ID"]
 RERANK_MODEL_ID = os.environ.get("RERANK_MODEL_ID", "amazon.rerank-v1:0")
-GENERATION_MODEL_ID = os.environ.get(
-    "GENERATION_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0"
-)
+GENERATION_MODEL_ID = os.environ.get("GENERATION_MODEL_ID", "apac.anthropic.claude-3-5-sonnet-20241022-v2:0")
 REGION = os.environ.get("REGION", "ap-northeast-1")
 
-bedrock_agent_runtime = boto3.client(
-    "bedrock-agent-runtime", region_name=REGION
-)
-bedrock_runtime = boto3.client("bedrock-runtime", region_name=REGION)
+bedrock_agent = boto3.client("bedrock-agent-runtime", region_name=REGION)
+bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 
 
-def retrieve_from_kb(
-    query: str, top_k: int = 10
-) -> list[dict[str, Any]]:
-    """Knowledge Base からドキュメントを検索する。"""
-    response = bedrock_agent_runtime.retrieve(
+def lambda_handler(event, context):
+    body = json.loads(event.get("body", "{}"))
+    query = body.get("query", "")
+    top_k = body.get("top_k", 10)
+    top_n = body.get("top_n", 5)
+
+    if not query:
+        return response(400, {"error": "query is required"})
+
+    try:
+        # Step 1: Knowledge Base から検索
+        docs = retrieve(query, top_k)
+
+        # Step 2: リランクで関連度順に並び替え
+        reranked = rerank(query, docs, top_n)
+
+        # Step 3: リランク結果を基に回答生成
+        answer = generate(query, reranked)
+
+        return response(200, {
+            "answer": answer,
+            "sources": [
+                {"content": d["content"][:200], "rerank_score": d["rerank_score"], "location": d["location"]}
+                for d in reranked
+            ],
+            "retrieved_count": len(docs),
+            "reranked_count": len(reranked),
+        })
+    except Exception as e:
+        return response(500, {"error": str(e)})
+
+
+def retrieve(query, top_k):
+    res = bedrock_agent.retrieve(
         knowledgeBaseId=KNOWLEDGE_BASE_ID,
         retrievalQuery={"text": query},
-        retrievalConfiguration={
-            "vectorSearchConfiguration": {
-                "numberOfResults": top_k,
-            }
-        },
+        retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": top_k}},
     )
-
-    results = []
-    for item in response.get("retrievalResults", []):
-        results.append(
-            {
-                "content": item["content"]["text"],
-                "score": item.get("score", 0.0),
-                "location": item.get("location", {}),
-                "metadata": item.get("metadata", {}),
-            }
-        )
-    return results
-
-
-def rerank_results(
-    query: str,
-    documents: list[dict[str, Any]],
-    top_n: int = 5,
-) -> list[dict[str, Any]]:
-    """Amazon Rerank モデルでリランクする。"""
-    if not documents:
-        return []
-
-    text_sources = [
-        {
-            "type": "INLINE",
-            "inlineDocumentSource": {
-                "type": "TEXT",
-                "textDocument": {"text": doc["content"]},
-            },
-        }
-        for doc in documents
+    return [
+        {"content": r["content"]["text"], "score": r.get("score", 0.0), "location": r.get("location", {})}
+        for r in res.get("retrievalResults", [])
     ]
 
-    response = bedrock_agent_runtime.rerank(
+
+def rerank(query, docs, top_n):
+    if not docs:
+        return []
+
+    res = bedrock_agent.rerank(
         queries=[{"type": "TEXT", "textQuery": {"text": query}}],
-        sources=text_sources,
+        sources=[
+            {"type": "INLINE", "inlineDocumentSource": {"type": "TEXT", "textDocument": {"text": d["content"]}}}
+            for d in docs
+        ],
         rerankingConfiguration={
             "type": "BEDROCK_RERANKING_MODEL",
             "bedrockRerankingConfiguration": {
-                "modelConfiguration": {
-                    "modelArn": f"arn:aws:bedrock:{REGION}::foundation-model/{RERANK_MODEL_ID}",
-                },
-                "numberOfResults": min(top_n, len(documents)),
+                "modelConfiguration": {"modelArn": f"arn:aws:bedrock:{REGION}::foundation-model/{RERANK_MODEL_ID}"},
+                "numberOfResults": min(top_n, len(docs)),
             },
         },
     )
-
-    reranked = []
-    for result in response.get("results", []):
-        idx = result["index"]
-        reranked.append(
-            {
-                "content": documents[idx]["content"],
-                "original_score": documents[idx]["score"],
-                "rerank_score": result["relevanceScore"],
-                "location": documents[idx]["location"],
-            }
-        )
-    return reranked
+    return [
+        {"content": docs[r["index"]]["content"], "rerank_score": r["relevanceScore"], "location": docs[r["index"]]["location"]}
+        for r in res.get("results", [])
+    ]
 
 
-def generate_response(query: str, contexts: list[dict[str, Any]]) -> str:
-    """リランク済みコンテキストを使って回答を生成する。"""
+def generate(query, contexts):
     context_text = "\n\n---\n\n".join(
-        [
-            f"[Source {i + 1}] (relevance: {ctx['rerank_score']:.4f})\n{ctx['content']}"
-            for i, ctx in enumerate(contexts)
-        ]
+        f"[Source {i+1}] (relevance: {c['rerank_score']:.4f})\n{c['content']}" for i, c in enumerate(contexts)
     )
-
-    prompt = f"""以下のコンテキスト情報を基に、ユーザーの質問に正確に回答してください。
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 2048,
+        "messages": [{"role": "user", "content": f"""以下のコンテキスト情報を基に、ユーザーの質問に正確に回答してください。
 コンテキストに含まれない情報については「情報が見つかりませんでした」と回答してください。
 
 ## コンテキスト
@@ -112,84 +98,12 @@ def generate_response(query: str, contexts: list[dict[str, Any]]) -> str:
 ## 質問
 {query}
 
-## 回答"""
-
-    body = json.dumps(
-        {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 2048,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-        }
-    )
-
-    response = bedrock_runtime.invoke_model(
-        modelId=GENERATION_MODEL_ID,
-        contentType="application/json",
-        accept="application/json",
-        body=body,
-    )
-
-    response_body = json.loads(response["body"].read())
-    return response_body["content"][0]["text"]
+## 回答"""}],
+        "temperature": 0.0,
+    })
+    res = bedrock.invoke_model(modelId=GENERATION_MODEL_ID, contentType="application/json", accept="application/json", body=body)
+    return json.loads(res["body"].read())["content"][0]["text"]
 
 
-def lambda_handler(
-    event: dict[str, Any], context: Any
-) -> dict[str, Any]:
-    """Lambda ハンドラー。"""
-    try:
-        body = json.loads(event.get("body", "{}"))
-        query = body.get("query", "")
-        top_k = body.get("top_k", 10)
-        top_n = body.get("top_n", 5)
-
-        if not query:
-            return {
-                "statusCode": 400,
-                "headers": {"Content-Type": "application/json"},
-                "body": json.dumps(
-                    {"error": "query is required"}, ensure_ascii=False
-                ),
-            }
-
-        # Step 1: Knowledge Base から検索
-        retrieved_docs = retrieve_from_kb(query, top_k=top_k)
-
-        # Step 2: リランクで関連度順に並び替え
-        reranked_docs = rerank_results(query, retrieved_docs, top_n=top_n)
-
-        # Step 3: リランク結果を基に回答生成
-        answer = generate_response(query, reranked_docs)
-
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps(
-                {
-                    "answer": answer,
-                    "sources": [
-                        {
-                            "content": doc["content"][:200] + "..."
-                            if len(doc["content"]) > 200
-                            else doc["content"],
-                            "rerank_score": doc["rerank_score"],
-                            "location": doc["location"],
-                        }
-                        for doc in reranked_docs
-                    ],
-                    "retrieved_count": len(retrieved_docs),
-                    "reranked_count": len(reranked_docs),
-                },
-                ensure_ascii=False,
-            ),
-        }
-
-    except Exception as e:
-        return {
-            "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps(
-                {"error": str(e)}, ensure_ascii=False
-            ),
-        }
+def response(status_code, body):
+    return {"statusCode": status_code, "headers": {"Content-Type": "application/json"}, "body": json.dumps(body, ensure_ascii=False)}
