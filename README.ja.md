@@ -40,15 +40,26 @@ pnpm cdk bootstrap  # 初回のみ
 pnpm cdk deploy
 ```
 
-デプロイが完了すると、以下が自動的に実行されます：
-- S3 Vectors のベクトルバケット・インデックスの作成
-- Bedrock Knowledge Base の構築
-- サンプルドキュメントの S3 アップロード
-- データソースの同期（インジェストジョブの開始）
-
-デプロイ完了後、インジェストジョブが完了するまで1〜2分お待ちください。
+デプロイが完了すると、以下が自動的に作成されます：
+- S3 Vectors のベクトルバケット・インデックス
+- Bedrock Knowledge Base
+- S3 データソースバケット
+- S3 イベントによる自動同期（Lambda）
+- RAG クエリ API（Lambda + API Gateway）
 
 ## 使い方
+
+### 1. ドキュメントのアップロード
+
+デプロイ出力の `DataSourceBucketName` に表示される S3 バケットにドキュメントをアップロードします。サンプルデータも同梱しています。
+
+```bash
+aws s3 sync sample_data/ s3://<DataSourceBucketName>/
+```
+
+S3 へのファイル追加・削除時に、Knowledge Base の同期が自動的に実行されます。同期完了まで1〜2分お待ちください。
+
+### 2. クエリの実行
 
 デプロイ出力に表示される `QueryEndpoint` を使用してクエリを実行します。
 
